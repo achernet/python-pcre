@@ -28,6 +28,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #include <Python.h>
 #include <structmember.h>
+#include <stdint.h>
 
 #include <pcre.h>
 
@@ -127,10 +128,17 @@ _string_get_from_bytes(pypcre_string_t *str, PyObject *op, int *options,
     if (!(*options & PCRE_UTF8)) {
         *options |= PCRE_NO_UTF8_CHECK;
 
-        /* Count non-ascii bytes. */
-        for (p = start; p < end; ++p) {
-            if (*p > 127)
-                ++count;
+        /* Count non-ascii bytes. This loop tries to operate in a "vectorized"
+         * manner, operating on 8 bytes at a time when possible. */
+        unsigned int remainder = view->len % sizeof(uint64_t);
+        for (p = start; p < end - remainder; p += sizeof(uint64_t)) {
+            /* Mask off the top bits of each byte. */
+            uint64_t temp = *(uint64_t*)p & 0x8080808080808080ULL;
+            /* Count how many of them are set, and add the count to "count". */
+            count += __builtin_popcountll(temp);
+        }
+        for (p = end - remainder; p < end; ++p) {
+            count += (*p & 0x80) >> 7;
         }
     }
 
